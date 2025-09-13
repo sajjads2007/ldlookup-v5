@@ -1,60 +1,63 @@
-# v5.0.1.2 — LD Lookup
-# - Oxford blue theme + white title + disclaimer
-# - Clean table ("View" link instead of long URL)
-# - Thumbnails + in-app full-size preview via st.modal
-# - Excel & PDF exports (optional image embedding)
+# LD Lookup — Version 5.0.1.3
+# - Oxford blue background + white header and disclaimer
+# - Detect L-numbers from CSV/XLSX/XLS/TXT/PDF/DOCX or pasted text
+# - Results table with a single "Image" column: clickable thumbnail (100px)
+# - Clicking the thumbnail opens a full-size PREVIEW MODAL in-app (no redirect)
+# - Excel/PDF exports (PDF can optionally embed thumbnails)
+# - Uses query params (?preview=...) to trigger the modal cleanly
 
 import io
 import re
 from pathlib import Path
 from typing import List, Optional
+from urllib.parse import quote_plus, unquote_plus
 
 import pandas as pd
 import requests
 import streamlit as st
 
-# Optional readers for DOCX/PDF
-import pdfplumber              # PDF text
-from docx import Document      # DOCX text
+# Optional readers
+import pdfplumber
+from docx import Document
 
 # -------------------------------------------------
-# Page & Styling
+# Page & styles
 # -------------------------------------------------
 OXFORD = "#0B132B"
-st.set_page_config(page_title="LD Lookup", page_icon="🧾", layout="wide")
+VERSION = "5.0.1.3"
+
+st.set_page_config(page_title=f"LD Lookup v{VERSION}", page_icon="🧾", layout="wide")
 
 st.markdown(
     f"""
     <style>
-      .stApp, .main {{
-        background-color: {OXFORD};
-      }}
+      .stApp, .main {{ background-color: {OXFORD}; }}
       .block-container {{
-        background: #ffffff;
-        border-radius: 16px;
-        padding: 18px 18px 8px 18px;
-        box-shadow: 0 2px 12px rgba(0,0,0,.12);
+          background: #ffffff;
+          border-radius: 16px;
+          padding: 18px 18px 10px 18px;
+          box-shadow: 0 2px 12px rgba(0,0,0,.12);
       }}
       .topbar {{
-        background: {OXFORD};
-        color: #fff;
-        padding: 14px 18px;
-        border-radius: 12px;
-        margin-bottom: 10px;
+          background: {OXFORD};
+          color: #fff;
+          padding: 14px 18px;
+          border-radius: 12px;
+          margin-bottom: 10px;
       }}
       .topbar h1 {{ margin: 0; font-size: 22px; color: #fff; }}
       .disclaimer {{ color:#C9CED8; font-size:.92rem; margin:4px 0 12px 0; }}
       .runrow {{ position: sticky; top: 0; z-index: 5; background: white; padding: 6px 0 2px; }}
-      .thumb {{
-        height: 70px; width: auto; object-fit: contain; border-radius: 6px;
-        border: 1px solid #e6e6e6; background: #fff;
-      }}
       .tbl table {{ border-collapse: collapse; width: 100%; }}
       .tbl th, .tbl td {{ border: 1px solid #e6e6e6; padding: 8px; vertical-align: middle; font-size: .92rem; }}
       .tbl th {{ background: #f6f7fb; color: {OXFORD}; text-align: left; }}
+      .thumb {{
+          height: 100px; width: auto; object-fit: contain; border-radius: 6px;
+          border: 1px solid #e6e6e6; background: #fff;
+      }}
       @media (max-width: 640px) {{
-        .thumb {{ height: 60px; }}
         .tbl th, .tbl td {{ font-size: .88rem; }}
+        .thumb {{ height: 96px; }}
       }}
     </style>
     """,
@@ -62,9 +65,9 @@ st.markdown(
 )
 
 st.markdown(
-    """
+    f"""
     <div class="topbar">
-      <h1>LD Lookup — Version 5.0</h1>
+      <h1>LD Lookup — Version {VERSION}</h1>
       <div class="disclaimer">This is not an official app — currently in debugging mode</div>
     </div>
     """,
@@ -72,7 +75,7 @@ st.markdown(
 )
 
 # -------------------------------------------------
-# Config & Helpers
+# Config & helpers
 # -------------------------------------------------
 IMG_WIDTH = 640
 IMG_QUALITY = 75
@@ -107,8 +110,7 @@ def read_any_file(file) -> str:
     Return concatenated text from uploaded file.
     Supports: CSV, XLSX/XLS, TXT, DOCX, PDF.
     """
-    name = file.name
-    suffix = Path(name).suffix.lower()
+    suffix = Path(file.name).suffix.lower()
 
     if suffix in [".xlsx", ".xls", ".csv"]:
         try:
@@ -137,10 +139,7 @@ def read_any_file(file) -> str:
     if suffix == ".pdf":
         try:
             with pdfplumber.open(file) as pdf:
-                texts = []
-                for page in pdf.pages:
-                    texts.append(page.extract_text() or "")
-                return "\n".join(texts)
+                return "\n".join((p.extract_text() or "") for p in pdf.pages)
         except Exception as e:
             return f"READ_ERROR: {e}"
 
@@ -148,6 +147,10 @@ def read_any_file(file) -> str:
         return "READ_ERROR: Legacy .doc detected. Convert to .docx or PDF and re-upload."
 
     return "READ_ERROR: Unsupported file type."
+
+def maybe_lookup_name_for_lnumber(l_number: str) -> Optional[str]:
+    # Placeholder; keep blank until you have a data source.
+    return None
 
 def make_excel_bytes(df: pd.DataFrame) -> bytes:
     out = io.BytesIO()
@@ -160,18 +163,16 @@ def make_excel_bytes(df: pd.DataFrame) -> bytes:
             return f'=IMAGE("{safe_url}","{safe_alt}")'
 
         df_xlsx["Photo"] = [excel_img(u, l) for u, l in zip(df_xlsx["ImageURL"], df_xlsx["LNumber"])]
-        df_xlsx[["LNumber", "ImageURL", "Photo"]].to_excel(writer, index=False, sheet_name="Results")
+        df_xlsx[["LNumber", "ImageURL", "Photo", "Name"]].to_excel(writer, index=False, sheet_name="Results")
         ws = writer.sheets["Results"]
         ws.set_column(0, 0, 14)  # LNumber
         ws.set_column(1, 1, 60)  # URL
         ws.set_column(2, 2, 18)  # Photo
+        ws.set_column(3, 3, 36)  # Name
     out.seek(0)
     return out.read()
 
-def make_pdf_bytes(df: pd.DataFrame, include_images: bool = False, thumb_h: int = 72) -> bytes:
-    """
-    Lightweight PDF export. If include_images=True, downloads images and embeds thumbnails.
-    """
+def make_pdf_bytes(df: pd.DataFrame, include_images: bool = False, thumb_h: int = 100) -> bytes:
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
     from reportlab.lib import colors
@@ -184,12 +185,13 @@ def make_pdf_bytes(df: pd.DataFrame, include_images: bool = False, thumb_h: int 
     story = []
 
     story.append(Paragraph("LD Lookup — Results", styles["Title"]))
-    story.append(Paragraph("Version 5.0.1.2", styles["Normal"]))
+    story.append(Paragraph(f"Version {VERSION}", styles["Normal"]))
     story.append(Spacer(1, 10))
 
-    data = [["LNumber", "ImageURL", "Photo (thumb)"]]
+    data = [["LNumber", "Name", "ImageURL", "Photo (thumb)"]]
     for _, r in df.iterrows():
         lnum = str(r["LNumber"])
+        name = str(r.get("Name", ""))
         url  = str(r["ImageURL"])
         cell_img = ""
         if include_images:
@@ -205,9 +207,9 @@ def make_pdf_bytes(df: pd.DataFrame, include_images: bool = False, thumb_h: int 
                     cell_img = img
             except Exception:
                 cell_img = ""
-        data.append([lnum, url, cell_img])
+        data.append([lnum, name, url, cell_img])
 
-    tbl = Table(data, colWidths=[90, 360, 120])
+    tbl = Table(data, colWidths=[90, 180, 360, 140])
     tbl.setStyle(TableStyle([
         ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
         ("TEXTCOLOR", (0,0), (-1,0), colors.HexColor(OXFORD)),
@@ -221,10 +223,6 @@ def make_pdf_bytes(df: pd.DataFrame, include_images: bool = False, thumb_h: int 
     buf.seek(0)
     return buf.read()
 
-def maybe_lookup_name_for_lnumber(l_number: str) -> Optional[str]:
-    # Placeholder: wire to a real source if/when available.
-    return None
-
 # -------------------------------------------------
 # Inputs
 # -------------------------------------------------
@@ -234,11 +232,11 @@ with st.expander("Input options", expanded=True):
         uploaded = st.file_uploader(
             "Upload CSV / XLSX / XLS / TXT / PDF / DOCX",
             type=["csv", "xlsx", "xls", "txt", "pdf", "docx"],
-            key="file_input_v5_modal"
+            key="file_input_v5_clickthumb"
         )
         st.caption("Tip: For old .doc, convert to .docx first.")
     with c2:
-        pasted = st.text_area("Or paste any text", height=180, key="pasted_v5_modal")
+        pasted = st.text_area("Or paste any text", height=180, key="pasted_v5_clickthumb")
 
 st.markdown('<div class="runrow"></div>', unsafe_allow_html=True)
 run = st.button("🚀 Run L-Number Lookup", use_container_width=True, type="primary")
@@ -246,7 +244,7 @@ if not run:
     st.stop()
 
 # -------------------------------------------------
-# Collect data
+# Collect & parse
 # -------------------------------------------------
 lnumbers: List[str] = []
 
@@ -263,64 +261,51 @@ if not lnumbers:
     st.warning("No L-numbers detected. Provide data containing items like **L1304179**.")
     st.stop()
 
-# Build results dataframe
 df = pd.DataFrame({"LNumber": lnumbers})
 df["LNumber"] = df["LNumber"].str.upper().str.strip()
 df["ImageURL"] = df["LNumber"].apply(build_image_url)
-# Optional names (left blank if not available)
 df["Name"] = [maybe_lookup_name_for_lnumber(l) or "" for l in df["LNumber"]]
 
 # -------------------------------------------------
-# Table (clean links + thumbnails)
+# Full-size PREVIEW modal driven by query params
 # -------------------------------------------------
-def link_text(url: str, label: str = "View") -> str:
-    return f'<a href="{url}" target="_blank">{label}</a>'
+qp = st.query_params
+if "preview" in qp:
+    preview_url = unquote_plus(qp.get("preview"))
+    with st.modal("Preview", key="img_modal"):
+        st.image(preview_url, use_column_width=True)
+        if st.button("Close"):
+            st.query_params.clear()
+            st.rerun()
 
+def thumb_link(url: str, lnum: str) -> str:
+    # clicking the thumbnail reloads the same page with ?preview=<url>, opening the modal
+    href = f"?preview={quote_plus(url)}"
+    return f'<a href="{href}" title="Click to preview {lnum}"><img class="thumb" src="{url}" alt="{lnum}"></a>'
+
+# -------------------------------------------------
+# Results table (Name + Image column with clickable thumbnail)
+# -------------------------------------------------
 rows_html = []
 for _, r in df.iterrows():
     lnum = r["LNumber"]
-    url  = r["ImageURL"]
     name = r["Name"]
-    thumb = f'<img class="thumb" src="{url}" alt="{lnum}"/>'
-    link  = link_text(url, "View")
-    rows_html.append(
-        f"<tr><td>{lnum}</td><td>{name}</td><td>{link}</td><td>{thumb}</td></tr>"
-    )
+    url  = r["ImageURL"]
+    img_cell = thumb_link(url, lnum) + f'&nbsp; <a href="{url}" target="_blank">View</a>'
+    rows_html.append(f"<tr><td>{lnum}</td><td>{name}</td><td>{img_cell}</td></tr>")
 
 st.subheader("Results")
 st.markdown(
     f"""
     <div class="tbl">
       <table>
-        <thead><tr><th>LNumber</th><th>Name</th><th>Image</th><th>Photo (thumb)</th></tr></thead>
+        <thead><tr><th>LNumber</th><th>Name</th><th>Image</th></tr></thead>
         <tbody>{''.join(rows_html)}</tbody>
       </table>
     </div>
     """,
     unsafe_allow_html=True,
 )
-
-# -------------------------------------------------
-# In-app full-size preview (modal)
-# -------------------------------------------------
-st.markdown("**Tap a thumbnail below to preview in-app:**")
-
-PREVIEW_COLS = st.slider("Preview grid columns", 3, 10, 6, key="grid_cols_v5")
-grid = st.columns(PREVIEW_COLS)
-
-# keep selected url in session
-if "preview_url" in st.session_state and st.session_state["preview_url"]:
-    with st.modal("Preview", key="img_modal"):
-        st.image(st.session_state["preview_url"], use_column_width=True)
-        st.caption(st.session_state.get("preview_caption", ""))
-
-for i, r in df.iterrows():
-    with grid[i % PREVIEW_COLS]:
-        st.image(r["ImageURL"], caption=r["LNumber"], use_container_width=True)
-        if st.button("🔍 Preview", key=f"pv_{i}"):
-            st.session_state["preview_url"] = r["ImageURL"]
-            st.session_state["preview_caption"] = r["LNumber"]
-            st.rerun()
 
 # -------------------------------------------------
 # Exports
