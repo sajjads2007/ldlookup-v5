@@ -1,3 +1,14 @@
 [theme]
 primaryColor = "#0B132B"
 base = "light"
+
+[server]
+# Prevent "inotify watch limit reached" on Streamlit Cloud
+fileWatcherType = "none"
+
+# (optional) these are fine to keep off
+enableCORS = false
+enableXsrfProtection = false
+
+[browser]
+gatherUsageStats = false
