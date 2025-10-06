@@ -239,7 +239,7 @@ with st.expander("Input options", expanded=True):
         pasted = st.text_area("Or paste any text", height=180, key="pasted_v5_clickthumb")
 
 st.markdown('<div class="runrow"></div>', unsafe_allow_html=True)
-run = st.button("🚀 Run L-Number Lookup", use_container_width=True, type="primary")
+run = st.button("Lookup", use_container_width=True, type="primary")
 if not run:
     st.stop()
 
